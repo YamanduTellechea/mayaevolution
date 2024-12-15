@@ -1,0 +1,7 @@
+Django>=3.2
+djangorestframework
+transformers
+django-cors-headers
+torch
+faiss-cpu
+requests
