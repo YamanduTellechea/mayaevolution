@@ -16,7 +16,7 @@
     "web-vitals": "^2.1.0"
   },
   "scripts": {
-    "start": "PORT=3000 react-scripts start",
+    "start": "cross-env PORT=3000 react-scripts start",
     "build": "react-scripts build"
   },
   "eslintConfig": {
@@ -38,6 +38,7 @@
     ]
   },
   "devDependencies": {
-    "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
+    "cross-env": "^7.0.3"
   }
 }
