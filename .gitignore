@@ -18,6 +18,8 @@ embeddings/
 *.npz
 *.bin
 *.pt
+*.csv
+*.jsonl
 
 # Dependencias locales
 /local/

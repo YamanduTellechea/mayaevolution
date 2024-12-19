@@ -6,7 +6,7 @@ import ResultsDashboard from './components/ResultsDashboard';
 function App() {
   return (
     <div className="App">
-      <h1 className="text-center">Plataforma de Comparación de Chatbots</h1>
+      <h1 className="text-center">Maya Movie Assistant</h1>
       <ChatInterface />
     </div>
   );

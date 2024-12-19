@@ -1,16 +1,14 @@
-import React, { useState, useEffect } from "react";
-import "./styles.css";
+import React, { useState } from "react";
+import "./style.css";
 
 const ChatInterface = () => {
+  // Estados
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("rag");
   const [messages, setMessages] = useState([]);
 
   const sendMessage = async () => {
-    if (!query.trim()) {
-      alert("Por favor, escribe algo antes de enviar.");
-      return;
-    }
+    if (!query.trim()) return;
 
     try {
       const response = await fetch("http://localhost:8000/api/chat/", {
@@ -19,76 +17,71 @@ const ChatInterface = () => {
         body: JSON.stringify({ query, mode }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
+      if (!response.ok) throw new Error("Error en la respuesta del servidor");
 
       const data = await response.json();
-      setMessages([...messages, { user: query, bot: data.answer }]);
+
+      // Validar que "answer" sea un array
+      if (data && Array.isArray(data.answer)) {
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          { user: query, bot: data.answer },
+        ]);
+      } else {
+        alert("Error: El servidor no devolvió los datos en el formato esperado.");
+      }
+
       setQuery("");
     } catch (error) {
-      console.error("Error:", error);
-      alert("Hubo un problema con el servidor.");
+      console.error("Error al enviar el mensaje:", error);
+      alert("Error al enviar el mensaje.");
     }
   };
 
-  // Scroll automático al fondo de la caja de chat
-  useEffect(() => {
-    const chatBox = document.getElementById("chat-box");
-    if (chatBox) {
-      chatBox.scrollTop = chatBox.scrollHeight;
-    }
-  }, [messages]);
-
   return (
-    <div className="container mt-5">
-      <div className="card">
-        <h2 className="text-center mb-4">Plataforma de Comparación de Chatbots</h2>
-        <div className="row mb-3">
-          {/* Selector de Modo */}
-          <div className="col-md-4">
-            <select
-              className="form-select"
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-            >
-              <option value="rag">RAG</option>
-              <option value="finetune">Fine-Tune</option>
-              <option value="hybrid">Híbrido</option>
-            </select>
-          </div>
-          {/* Input */}
-          <div className="col-md-6">
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Escribe tu pregunta..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            />
-          </div>
-          {/* Botón */}
-          <div className="col-md-2">
-            <button className="w-100" onClick={sendMessage}>
-              Enviar
-            </button>
-          </div>
-        </div>
+    <div className="container">
+      <h3>Encuentra tu pelicula</h3>
 
-        {/* Chat Box */}
-        <div id="chat-box" className="chat-box">
-          {messages.map((m, i) => (
-            <div key={i} className="chat-message mb-2">
-              <div className="text-primary">
-                <strong>Tú:</strong> {m.user}
-              </div>
-              <div className="text-success">
-                <strong>Bot:</strong> {m.bot}
-              </div>
+      <div className="input-group">
+        <select value={mode} onChange={(e) => setMode(e.target.value)}>
+          <option value="rag">RAG</option>
+          <option value="finetune">Fine-Tune</option>
+          <option value="hybrid">Híbrido</option>
+        </select>
+        <input
+          type="text"
+          placeholder="Escribe tu frase o diálogo..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button onClick={sendMessage}>Enviar</button>
+      </div>
+
+      <div className="chat-box">
+        {messages.map((m, i) => (
+          <div key={i} className="message">
+            {/* Mensaje del usuario */}
+            <div className="user-message">{m.user}</div>
+            {/* Respuesta del bot */}
+            <div className="bot-message">
+              {m.bot.map((movie, index) => (
+                <div key={index} className="movie-card">
+                  <h4>{movie.title || "Untitled"}</h4>
+                  <p>
+                    <strong>Overview:</strong>{" "}
+                    {movie.overview || "No overview available."}
+                  </p>
+                  <p>
+                    <strong>Genres:</strong> {movie.genres || "N/A"}
+                  </p>
+                  <p>
+                    <strong>Rating:</strong> {movie.rating || "N/A"}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   );

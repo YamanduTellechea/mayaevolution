@@ -1,22 +1,90 @@
-# from transformers import AutoTokenizer, AutoModelForCausalLM
-# import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, AdamW
+from torch.utils.data import DataLoader
+from datasets import load_dataset
+import torch
+import os
 
-# class FineTunedChatbot:
-#     def __init__(self, model_path):
-#         # Carga del modelo Llama2 fine-tuneado localmente
-#         # Ejemplo: "path/to/llama2-finetuned" debe contener la carpeta del modelo
-#         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-#         self.model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
+def fine_tune_model(
+    base_model_name="mistralai/Mistral-7B-Instruct-v0.3",
+    train_file="movies_data.jsonl",
+    output_dir="./fine_tuned_model",
+    num_train_epochs=3,
+    batch_size=2,
+    learning_rate=5e-5,
+    gradient_accumulation_steps=4,
+    max_grad_norm=1.0
+):
+    """
+    Fine-tuning personalizado del modelo.
+    """
+    if not os.path.exists(train_file):
+        raise FileNotFoundError(f"El archivo {train_file} no existe.")
 
-#     def generate_answer(self, query: str):
-#         # Ajustar el prompt según Llama2 chat style
-#         prompt = f"<s>[INST] <<SYS>>\nEres un asistente útil y amable.\n<</SYS>>\n{query}[/INST]"
-#         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-#         output = self.model.generate(**inputs, max_length=200, do_sample=True, temperature=0.7)
-#         answer = self.tokenizer.decode(output[0], skip_special_tokens=True)
-#         # Llama2 chat format: filtrar el prompt, quedarte con la respuesta.
-#         # Dependiendo de cómo hayas hecho el fine-tuning, ajusta el parseo.
-#         # Supongamos que la respuesta es lo que viene después del prompt
-#         # Aquí simplificamos y devolvemos todo excepto el prompt original.
-#         # En producción: filtra adecuadamente.
-#         return answer.replace(prompt, "").strip()
+    print(f"Cargando dataset desde {train_file}...")
+    tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch.float16
+    ).to("cuda")
+
+    dataset = load_dataset("json", data_files={"train": train_file})
+    def tokenize_function(example):
+        input_text = example["instruction"] + "\n" + example["response"]
+        tokenized = tokenizer(
+            input_text,
+            truncation=True,
+            max_length=512,
+            padding="max_length"
+        )
+        tokenized["labels"] = tokenized["input_ids"].copy()
+        return tokenized
+
+    tokenized_dataset = dataset["train"].map(tokenize_function, batched=True, remove_columns=["instruction", "response"])
+
+    train_dataloader = DataLoader(
+        tokenized_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=lambda x: {
+            "input_ids": torch.tensor([item["input_ids"] for item in x], dtype=torch.long).to("cuda"),
+            "attention_mask": torch.tensor([item["attention_mask"] for item in x], dtype=torch.long).to("cuda"),
+            "labels": torch.tensor([item["labels"] for item in x], dtype=torch.long).to("cuda"),
+        }
+    )
+
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    print("Iniciando el proceso de fine-tuning...")
+    model.train()
+
+    for epoch in range(num_train_epochs):
+        print(f"Inicio de la época {epoch + 1}/{num_train_epochs}")
+        total_loss = 0.0
+
+        for step, batch in enumerate(train_dataloader):
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss.backward()
+
+            if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+
+            total_loss += loss.item()
+
+            if (step + 1) % 100 == 0:
+                print(f"Step {step + 1}/{len(train_dataloader)}, Loss: {loss.item():.4f}")
+
+        avg_loss = total_loss / len(train_dataloader)
+        print(f"Época {epoch + 1} finalizada. Pérdida promedio: {avg_loss:.4f}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    print(f"Fine-tuning completado. Modelo guardado en: {output_dir}")
+
+
+fine_tune_model(train_file="movies_data.jsonl", output_dir="./fine_tuned_model")

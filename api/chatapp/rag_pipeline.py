@@ -1,448 +1,634 @@
+# import os
+# import json
+# import torch
+# import numpy as np
+# from sentence_transformers import SentenceTransformer
+# from transformers import AutoTokenizer, AutoModelForCausalLM
+# import pandas as pd
+# import spacy
+
+# class RAGChatbot:
+#     def __init__(self, dataset_path, embedding_file="movie_embeddings.npz",
+#                  embedding_model_name="all-MPNet-base-v2", base_model_name="mistralai/Mistral-7B-Instruct-v0.3"):
+#         """
+#         Inicialización del chatbot RAG especializado en recomendaciones de películas.
+#         """
+#         print("Inicializando RAGChatbot...")
+#         print(f"Cargando modelo de embeddings {embedding_model_name}...")
+#         self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
+
+#         print("Cargando modelo de NER con spaCy...")
+#         self.nlp = spacy.load("en_core_web_sm")  # Carga el modelo de spaCy
+
+#         print(f"Cargando dataset desde {dataset_path}...")
+#         self.movies = []
+#         self.ratings = None
+#         self._load_movies(dataset_path)
+
+#         # Cargar/generar embeddings
+#         if os.path.exists(embedding_file):
+#             self.load_embeddings(embedding_file)
+#         else:
+#             print("Generando embeddings para todas las películas del dataset...")
+#             self.embeddings = self._generate_embeddings()
+#             self.save_embeddings(embedding_file)
+
+#         print(f"Cargando modelo base: {base_model_name}...")
+#         self.tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+#         self.model = AutoModelForCausalLM.from_pretrained(
+#             base_model_name,
+#             torch_dtype=torch.float16
+#         ).to("cuda")
+
+   
+#     def extract_entities(self, query):
+#         """
+#         Extrae actores, géneros y nombres de películas de la consulta del usuario usando NER.
+#         """
+#         doc = self.nlp(query)
+#         actors = []
+#         genres = []
+#         movies = []
+
+#         # Detectar entidades en la consulta
+#         for ent in doc.ents:
+#             if ent.label_ == "PERSON":
+#                 actors.append(ent.text)
+#             elif ent.label_ == "WORK_OF_ART":
+#                 movies.append(ent.text)
+#             elif ent.text.lower() in {"action", "comedy", "drama", "thriller", "romance", "horror", "family"}:
+#                 genres.append(ent.text)
+
+#         return {
+#             "actors": list(set(actors)),
+#             "genres": list(set(genres)),
+#             "movies": list(set(movies))
+#         }    
+
+#     def _load_movies(self, dataset_path):
+#         """
+#         Carga películas de movies_metadata.csv, credits.csv y keywords.csv con géneros, actores y palabras clave procesados.
+#         """
+#         movies_file = os.path.join(dataset_path, "movies_metadata.csv")
+#         credits_file = os.path.join(dataset_path, "credits.csv")
+#         keywords_file = os.path.join(dataset_path, "keywords.csv")
+
+#         if not os.path.exists(movies_file):
+#             raise FileNotFoundError(f"No se encontró el dataset {movies_file}")
+#         if not os.path.exists(credits_file):
+#             raise FileNotFoundError(f"No se encontró el dataset {credits_file}")
+#         if not os.path.exists(keywords_file):
+#             raise FileNotFoundError(f"No se encontró el dataset {keywords_file}")
+
+#         print(f"Cargando datos desde {movies_file}, {credits_file} y {keywords_file}...")
+
+#         # Cargar los datos
+#         df_movies = pd.read_csv(movies_file, low_memory=False)
+#         df_credits = pd.read_csv(credits_file, low_memory=False)
+#         df_keywords = pd.read_csv(keywords_file, low_memory=False)
+
+#         # Filtrar filas con datos válidos
+#         df_movies = df_movies.dropna(subset=["title", "overview", "id", "vote_average", "genres"])
+#         df_movies = df_movies[df_movies["overview"].apply(lambda x: isinstance(x, str) and len(x.strip()) > 0)]
+
+#         # Asegurarse de que las columnas `id` tengan el mismo tipo
+#         df_movies["id"] = df_movies["id"].astype(str)
+#         df_credits["id"] = df_credits["id"].astype(str)
+#         df_keywords["id"] = df_keywords["id"].astype(str)
+
+#         # Procesar actores principales de los créditos
+#         def extract_top_actors(cast_string):
+#             try:
+#                 cast = eval(cast_string)  # Convertir la cadena a lista de diccionarios
+#                 return [member["name"] for member in cast[:5]]  # Tomar los primeros 5 actores
+#             except (SyntaxError, TypeError):
+#                 return []
+
+#         df_credits["top_actors"] = df_credits["cast"].apply(extract_top_actors)
+
+#         # Procesar palabras clave
+#         def parse_keywords(keywords_string):
+#             try:
+#                 keywords = eval(keywords_string)  # Convertir la cadena a lista de diccionarios
+#                 return [keyword["name"] for keyword in keywords]
+#             except (SyntaxError, TypeError):
+#                 return []
+
+#         df_keywords["keywords_list"] = df_keywords["keywords"].apply(parse_keywords)
+
+#         # Unir los DataFrames
+#         df_movies = df_movies.merge(df_credits[["id", "top_actors"]], on="id", how="left")
+#         df_movies = df_movies.merge(df_keywords[["id", "keywords_list"]], on="id", how="left")
+
+#         # Parsear géneros de JSON a lista de nombres
+#         def parse_genres(genre_string):
+#             try:
+#                 genres = json.loads(genre_string.replace("'", '"'))  # Asegura que sea un JSON válido
+#                 return [genre["name"] for genre in genres if "name" in genre]
+#             except (json.JSONDecodeError, TypeError):
+#                 return []
+
+#         df_movies["genres_list"] = df_movies["genres"].apply(parse_genres)
+
+#         # Procesar cada película
+#         for _, row in df_movies.iterrows():
+#             movie_id = int(row["id"]) if str(row["id"]).isdigit() else None
+#             if movie_id is None:
+#                 continue
+
+#             # Calificación promedio redondeada a 2 decimales
+#             vote_average = round(float(row["vote_average"]), 2)
+#             movie = {
+#                 "id": movie_id,
+#                 "title": str(row["title"]),
+#                 "overview": str(row["overview"]),
+#                 "genres": row["genres_list"],  # Lista de géneros
+#                 "actors": row["top_actors"] if isinstance(row["top_actors"], list) else [],  # Lista de actores principales
+#                 "keywords": row["keywords_list"] if isinstance(row["keywords_list"], list) else [],  # Lista de palabras clave
+#                 "rating": vote_average if vote_average > 0 else "N/A",  # Si la calificación es 0, marcar como N/A
+#             }
+#             self.movies.append(movie)
+
+#         print(f"Total de películas cargadas: {len(self.movies)}")
+
+      
+    
+#     def generate_answer(self, query: str):
+#         """
+#         Genera una respuesta en base a la consulta del usuario usando RAG, considerando entidades detectadas.
+#         """
+#         # Extraer entidades de la consulta
+#         entities = self.extract_entities(query)
+#         print(f"Entidades detectadas en la consulta: {entities}")
+
+#         # Construir texto enriquecido para el embedding de la consulta
+#         enriched_query = query
+#         if entities["actors"]:
+#             enriched_query += f" Actors: {', '.join(entities['actors'])}."
+#         if entities["genres"]:
+#             enriched_query += f" Genres: {', '.join(entities['genres'])}."
+#         if entities["movies"]:
+#             enriched_query += f" Related movies: {', '.join(entities['movies'])}."
+
+#         print(f"Consulta enriquecida para embeddings: {enriched_query}")
+
+#         # Generar embedding para la consulta enriquecida
+#         query_emb = self.embed(enriched_query)
+
+#         # Calcular similitudes entre el embedding de la consulta y los embeddings de las películas
+#         similarities = torch.nn.functional.cosine_similarity(query_emb, self.embeddings, dim=-1)
+#         top_indices = torch.topk(similarities, k=5).indices.cpu().numpy()
+
+#         # Recuperar contextos y construir el prompt
+#         retrieved_contexts = self.get_contexts(top_indices)
+#         print(retrieved_contexts)
+
+#         prompt = self.build_prompt(query, retrieved_contexts)
+
+#         # Generar respuesta del modelo base
+#         full_response = self._model_generate(prompt)
+#         # Mostrar la respuesta completa generada por el modelo antes de filtrar
+#         print(f"Respuesta completa del modelo:\n{full_response}")
+#         filtered_response = self._format_response(full_response)
+#         # Mostrar la respuesta filtrada para depuración
+#         print(f"Respuesta filtrada:\n{filtered_response}")
+
+#         return filtered_response
+
+    
+#     def get_contexts(self, indices):
+#         contexts = []
+#         for i in indices:
+#             if 0 <= i < len(self.movies):
+#                 movie = self.movies[i]
+#                 title = movie["title"]
+#                 overview = movie["overview"]
+#                 genres = ", ".join(movie["genres"])
+#                 rating = movie["rating"]
+#                 actors = ", ".join(movie.get("actors", []))  # Obtiene los actores principales si están disponibles
+#                 keywords = ", ".join(movie.get("keywords", []))  # Obtiene las palabras clave si están disponibles
+
+#                 context_text = (
+#                     f"Title: {title}\n"
+#                     f"Overview: {overview}\n"
+#                     f"Genres: {genres}\n"
+#                     f"Rating: {rating}\n"
+#                     f"Actors: {actors}\n"
+#                     f"Keywords: {keywords}"
+#                 )
+
+#                 contexts.append(context_text)
+#             else:
+#                 contexts.append("Información no encontrada.")
+#         return contexts
+
+
+
+#     def build_prompt(self, query, contexts):
+#         """
+#         Constructs a clean and concise prompt for the model in English.
+#         """
+#         context_str = "\n---\n".join(contexts)
+#         prompt = (
+#             f"Based on the user's request:\n'{query}'\n\n"
+#             f"Here are some movies:\n"
+#             f"{context_str}\n\n"
+#             f"Please respond with the following format for each movie:\n"
+#             f"Title: <movie title>\n"
+#             f"Description: <brief description>\n"
+#             f"Rating: <rating or N/A>\n\n"
+#             f"Response:"
+#         )
+#         return prompt
+
+#     def _format_response(self, response_text):
+#         """
+#         Formatea la respuesta del modelo en un JSON estructurado.
+#         """
+#         sections = response_text.split("---")
+#         movies = []
+
+#         for section in sections:
+#             lines = section.strip().split("\n")
+#             movie = {}
+#             for line in lines:
+#                 if line.startswith("Title:"):
+#                     movie["title"] = line.split("Title:", 1)[1].strip()
+#                 elif line.startswith("Overview:"):
+#                     movie["overview"] = line.split("Overview:", 1)[1].strip()
+#                 elif line.startswith("Genres:"):
+#                     movie["genres"] = line.split("Genres:", 1)[1].strip()
+#                 elif line.startswith("Rating:"):
+#                     movie["rating"] = line.split("Rating:", 1)[1].strip()
+#             if movie:
+#                 movies.append(movie)
+        
+#         return movies
+
+    
+#     def _generate_embeddings(self):
+#         """
+#         Genera embeddings para todas las películas utilizando información enriquecida
+#         (título, sinopsis, actores, géneros, palabras clave y calificación).
+#         """
+#         print("Generando embeddings para todas las películas...")
+
+#         # Crear textos enriquecidos para generar embeddings
+#         texts = []
+#         for movie in self.movies:
+#             title = movie.get("title", "").strip()
+#             overview = movie.get("overview", "").strip()
+#             genres = ", ".join(movie.get("genres", [])).strip()
+#             actors = ", ".join(movie.get("actors", [])).strip()
+#             keywords = ", ".join(movie.get("keywords", [])).strip()
+#             rating = movie.get("rating", "N/A")
+
+#             # Preprocesamiento para enriquecer el contexto y evitar ruido
+#             enriched_text = (
+#                 f"Movie Title: {title}. "
+#                 f"Description: {overview}. "
+#                 f"Genres: {genres}. "
+#                 f"Main Actors: {actors}. "
+#                 f"Keywords: {keywords}. "
+#                 f"Rating: {rating}."
+#             )
+
+#             # Limitar textos muy largos (si es necesario)
+#             if len(enriched_text) > 512:
+#                 enriched_text = enriched_text[:512] + "..."
+
+#             texts.append(enriched_text)
+
+#         # Generar embeddings utilizando el modelo
+#         try:
+#             embeddings = self.embedding_model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
+#         except Exception as e:
+#             print(f"Error al generar embeddings: {e}")
+#             embeddings = None
+
+#         print("Embeddings generados correctamente.")
+#         return embeddings
+
+
+#     def load_embeddings(self, file_path):
+#         print(f"Cargando embeddings desde {file_path}...")
+#         data = np.load(file_path, allow_pickle=True)
+#         self.embeddings = torch.tensor(data["embeddings"]).to("cuda")
+#         print("Embeddings cargados correctamente.")
+
+#     def save_embeddings(self, file_path):
+#         print(f"Guardando embeddings en {file_path}...")
+#         np.savez(file_path, embeddings=self.embeddings.cpu().numpy())
+#         print("Embeddings guardados correctamente.")
+
+#     def embed(self, text):
+#         emb = self.embedding_model.encode(text, convert_to_numpy=True).reshape(1, -1)
+#         return torch.tensor(emb, device="cuda").float()
+
+#     def _model_generate(self, prompt):
+#         inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to("cuda")
+#         output = self.model.generate(
+#             **inputs,
+#             max_new_tokens=150,
+#             do_sample=True,
+#             top_p=0.9,
+#             temperature=0.7,
+#             pad_token_id=self.tokenizer.eos_token_id,
+#             repetition_penalty=1.2
+#         )
+#         return self.tokenizer.decode(output[0], skip_special_tokens=True)
+
 import os
-import csv
-from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import json
 import torch
 import numpy as np
-
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import pandas as pd
+import spacy
+import bitsandbytes as bnb
 
 class RAGChatbot:
+    def __init__(self, dataset_path, embedding_file="movie_embeddings.npz",
+             embedding_model_name="all-MPNet-base-v2", base_model_name="mistralai/Mistral-7B-Instruct-v0.3"):
+        """
+        Inicialización del chatbot RAG especializado en recomendaciones de películas.
+        """
+        print("Inicializando RAGChatbot...")
 
-    def __init__(self, dataset_path, embedding_file="embeddings.npz", embedding_model_name="all-MiniLM-L6-v2"):
-        """
-        Inicialización del chatbot RAG con soporte para embeddings precalculados.
-        """
+        # Carga de modelo de embeddings
         print(f"Cargando modelo de embeddings {embedding_model_name}...")
         self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
 
-        # Cargar dataset
-        print(f"Cargando dataset desde {dataset_path}...")
-        # Inicialización de estructuras de datos
-        self.lines = {}  # Mapeo lineID -> texto
-        self.line_to_movie = {}  # Mapeo lineID -> movieID
-        self.movies = {}  # Mapeo movieID -> movie_title
-        self._load_dataset(dataset_path)
+        # Carga del modelo de NER
+        print("Cargando modelo de NER con spaCy...")
+        self.nlp = spacy.load("en_core_web_sm")
 
-        # Cargar o generar embeddings
-        if os.path.exists(embedding_file):            
-            self.load_embeddings(embedding_file)
-        else:
-            print("Generando embeddings para todas las líneas del dataset...")
-            self.embeddings = self._generate_embeddings()
-            self.save_embeddings(embedding_file)
-
-        # Cargar modelo de generación
-        print("Cargando modelo de generación (mistralai/Mistral-7B-Instruct-v0.3)...")
-        self.tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
+        # Carga del modelo base cuantizado
+        print(f"Cargando modelo base cuantizado: {base_model_name}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(base_model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
-            "mistralai/Mistral-7B-Instruct-v0.3",
-            torch_dtype=torch.float16
-        ).to("cuda")
+            base_model_name,
+            device_map="auto",  # Asigna automáticamente entre CPU/GPU
+            torch_dtype=torch.float16,  # Precisión reducida
+            load_in_4bit=True  # Activar cuantización de 4 bits
+        )
 
-    def _load_dataset(self, dataset_path):
-        """Carga el dataset desde los archivos TSV."""
-        lines_path = f"{dataset_path}/movie_lines.tsv"
-        movies_path = f"{dataset_path}/movie_titles_metadata.tsv"
 
-        self._load_lines(lines_path)
-        self._load_movies(movies_path)
+        # Carga de datos y embeddings
+        self.movies = []
+        self.embeddings = None
+        self.dataset_path = dataset_path
+        self.embedding_file = embedding_file
 
-        print(f"Total de líneas cargadas: {len(self.lines)}")
-        print(f"Total de líneas con películas asociadas: {len(self.line_to_movie)}")
+        # Inicializar datos
+        self._initialize_data()
+
+    def _initialize_data(self):
+        """
+        Carga los datos y embeddings solo si no están disponibles.
+        """
+        print(f"Cargando dataset desde {self.dataset_path}...")
+        self._load_movies(self.dataset_path)
+
+        if os.path.exists(self.embedding_file):
+            print(f"Cargando embeddings desde {self.embedding_file}...")
+            self.load_embeddings(self.embedding_file)
+        else:
+            print("Generando embeddings para todas las películas del dataset...")
+            self.embeddings = self._generate_embeddings()
+            print(f"Guardando embeddings generados en {self.embedding_file}...")
+            self.save_embeddings(self.embedding_file)
+
+
+    def extract_entities(self, query):
+        """
+        Extrae actores, géneros y nombres de películas de la consulta del usuario usando NER.
+        """
+        doc = self.nlp(query)
+        actors = []
+        genres = []
+        movies = []
+
+        # Detectar entidades en la consulta
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                actors.append(ent.text)
+            elif ent.label_ == "WORK_OF_ART":
+                movies.append(ent.text)
+            elif ent.text.lower() in {"action", "comedy", "drama", "thriller", "romance", "horror", "family"}:
+                genres.append(ent.text)
+
+        return {
+            "actors": list(set(actors)),
+            "genres": list(set(genres)),
+            "movies": list(set(movies))
+        }    
+
+    def extract_entities(self, query):
+        """
+        Extrae actores, géneros y nombres de películas de la consulta del usuario usando NER.
+        """
+        doc = self.nlp(query)
+        actors = []
+        genres = []
+        movies = []
+
+        # Detectar entidades en la consulta
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                actors.append(ent.text)
+            elif ent.label_ == "WORK_OF_ART":
+                movies.append(ent.text)
+            elif ent.text.lower() in {"action", "comedy", "drama", "thriller", "romance", "horror", "family"}:
+                genres.append(ent.text)
+
+        return {
+            "actors": list(set(actors)),
+            "genres": list(set(genres)),
+            "movies": list(set(movies))
+        }
+
+    def _load_movies(self, dataset_path):
+        """
+        Carga películas de movies_metadata.csv, credits.csv y keywords.csv con géneros, actores y palabras clave procesados.
+        """
+        movies_file = os.path.join(dataset_path, "movies_metadata.csv")
+        credits_file = os.path.join(dataset_path, "credits.csv")
+        keywords_file = os.path.join(dataset_path, "keywords.csv")
+
+        if not all(os.path.exists(f) for f in [movies_file, credits_file, keywords_file]):
+            raise FileNotFoundError("Uno o más archivos de dataset no encontrados.")
+
+        print(f"Cargando datos desde {movies_file}, {credits_file} y {keywords_file}...")
+        df_movies = pd.read_csv(movies_file, low_memory=False)
+        df_credits = pd.read_csv(credits_file, low_memory=False)
+        df_keywords = pd.read_csv(keywords_file, low_memory=False)
+
+        # Procesar y limpiar datos
+        df_movies = df_movies.dropna(subset=["title", "overview", "id", "vote_average", "genres"])
+        df_movies["id"] = df_movies["id"].astype(str)
+        df_credits["id"] = df_credits["id"].astype(str)
+        df_keywords["id"] = df_keywords["id"].astype(str)
+
+        def extract_top_actors(cast_string):
+            try:
+                cast = eval(cast_string)
+                return [member["name"] for member in cast[:5]]
+            except (SyntaxError, TypeError):
+                return []
+
+        def parse_keywords(keywords_string):
+            try:
+                keywords = eval(keywords_string)
+                return [keyword["name"] for keyword in keywords]
+            except (SyntaxError, TypeError):
+                return []
+
+        def parse_genres(genre_string):
+            try:
+                genres = json.loads(genre_string.replace("'", '"'))
+                return [genre["name"] for genre in genres if "name" in genre]
+            except (json.JSONDecodeError, TypeError):
+                return []
+
+        df_credits["top_actors"] = df_credits["cast"].apply(extract_top_actors)
+        df_keywords["keywords_list"] = df_keywords["keywords"].apply(parse_keywords)
+        df_movies["genres_list"] = df_movies["genres"].apply(parse_genres)
+
+        df_movies = df_movies.merge(df_credits[["id", "top_actors"]], on="id", how="left")
+        df_movies = df_movies.merge(df_keywords[["id", "keywords_list"]], on="id", how="left")
+
+        for _, row in df_movies.iterrows():
+            movie_id = int(row["id"]) if row["id"].isdigit() else None
+            if movie_id is None:
+                continue
+
+            self.movies.append({
+                "id": movie_id,
+                "title": row["title"],
+                "overview": row["overview"],
+                "genres": row["genres_list"],
+                "actors": row["top_actors"] if isinstance(row["top_actors"], list) else [],
+                "keywords": row["keywords_list"] if isinstance(row["keywords_list"], list) else [],
+                "rating": round(float(row["vote_average"]), 2) if row["vote_average"] > 0 else "N/A"
+            })
+
         print(f"Total de películas cargadas: {len(self.movies)}")
-
-    def _load_lines(self, lines_path):
-        """Carga las líneas de diálogo desde movie_lines.tsv."""
-        print(f"Cargando líneas desde {lines_path}...")
-        with open(lines_path, "r", encoding="iso-8859-1") as f:
-            reader = csv.reader(f, delimiter="\t")
-            for row in reader:
-                if len(row) >= 5:  # Asegúrate de que haya suficientes columnas
-                    line_id = row[0].strip()  # ID de la línea
-                    movie_id = row[2].strip()  # ID de la película
-                    text = row[4].strip()  # Texto de la línea
-
-                    # Verificar si los IDs están presentes y son válidos
-                    if not line_id or not movie_id:
-                        print(f"Saltando línea con datos incompletos: line_id={line_id}, movie_id={movie_id}")
-                        continue
-
-                    # Guardar el texto de la línea
-                    self.lines[line_id] = text
-
-                    # Mapear la línea al ID de la película
-                    if movie_id:
-                        self.line_to_movie[line_id] = movie_id
-                      
-
-        print(f"Líneas cargadas: {len(self.lines)}")
-        print(f"Líneas con películas: {len(self.line_to_movie)}")
-
-
-    def _load_movies(self, movies_path):
-        """Carga los títulos de las películas desde movie_titles_metadata.txt."""
-        print(f"Cargando películas desde {movies_path}...")
-        with open(movies_path, "r", encoding="iso-8859-1") as f:
-            reader = csv.reader(f, delimiter="\t")
-            for row in reader:
-                if len(row) >= 2:
-                    movie_id = row[0].strip()
-                    movie_title = row[1].strip()
-                    self.movies[movie_id] = movie_title
 
     def generate_answer(self, query: str):
         """
-        Genera una respuesta basada en el contexto más similar al query.
+        Genera una respuesta en base a la consulta del usuario usando RAG, considerando entidades detectadas.
         """
-        print(f"Generando embeddings para la consulta: {query}")
+        entities = self.extract_entities(query)
+        print(f"Entidades detectadas: {entities}")
 
-        # Generar embeddings para la consulta
-        query_emb = self.embed(query)
+        enriched_query = query
+        if entities["actors"]:
+            enriched_query += f" Actors: {', '.join(entities['actors'])}."
+        if entities["genres"]:
+            enriched_query += f" Genres: {', '.join(entities['genres'])}."
+        if entities["movies"]:
+            enriched_query += f" Movies: {', '.join(entities['movies'])}."
 
-        # Calcular similitud con todas las líneas
+        print(f"Consulta enriquecida: {enriched_query}")
+        query_emb = self.embed(enriched_query)
+
         similarities = torch.nn.functional.cosine_similarity(query_emb, self.embeddings, dim=-1)
         top_indices = torch.topk(similarities, k=5).indices.cpu().numpy()
 
-        # Recuperar contextos relevantes con detalles de película
-        retrieved_contexts = self.get_contexts(top_indices)
+        contexts = self.get_contexts(top_indices)
+        prompt = self.build_prompt(query, contexts)
 
-        # Construir el prompt
-        prompt = self.build_prompt(query, retrieved_contexts)
-        print(f"Prompt construido (solo para modelo):\n{prompt}")
+        full_response = self._model_generate(prompt)
+        print(f"Respuesta completa: {full_response}")
 
-        # Generar la respuesta usando el modelo de lenguaje
-        print("Generando respuesta con el modelo de lenguaje...")
-        inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
-        # output = self.model.generate(
-        #     **inputs,
-        #     max_length=200,          # Aumenta la longitud máxima para evitar cortes
-        #     do_sample=True,          # Activa muestreo
-        #     temperature=0.7,         # Ajusta la creatividad del modelo (valor entre 0.1 y 1.0)
-        #     top_p=0.9,               # Nucleus sampling (ajusta para evitar palabras irrelevantes)
-        #     repetition_penalty=1.2,  # Penaliza repeticiones
-        #     pad_token_id=self.tokenizer.eos_token_id  # Evita warnings de padding
-        # )
+        filtered_response = self._format_response(full_response)
+        print(f"Respuesta filtrada: {filtered_response}")
+        return filtered_response
 
-        output = self.model.generate(
-            **inputs,
-            max_length=200,          # Ajusta si necesitas más o menos tokens
-            do_sample=False,         # Generación determinista
-            repetition_penalty=1.2,  # Penaliza repeticiones
-            pad_token_id=self.tokenizer.eos_token_id
-        )
-
-        answer = self.tokenizer.decode(output[0], skip_special_tokens=True)
-        return self._filter_generated_answer(answer, query)
-
-    def get_contexts(self, indices):
-        """
-        Recupera los textos asociados a los índices devueltos por similitud, junto con sus películas correspondientes.
-        """
-        print(f"Recuperando contextos para índices: {indices}")
-        contexts = []
-
-        for i in indices:
-            if 0 <= i < len(self.line_id_list):  # Validación de índice
-                line_id = self.line_id_list[i]
-                text = self.lines[line_id]
-                movie_id = self.line_to_movie.get(line_id, None)
-                movie_title = self.movies.get(movie_id, "Película no encontrada")
-                print(f"Línea: {line_id}, Película: {movie_id}, Título: {movie_title}, Texto: {text}")
-                contexts.append(f"{text} - {movie_title}")
-            else:
-                contexts.append(f"Texto no encontrado para índice {i}")
-
-        return contexts
-
-
-    def embed(self, text):
-        """Convierte el texto en un embedding utilizando el modelo de embeddings."""
-        print("Generando embeddings para el texto...")
-        emb = self.embedding_model.encode(text, convert_to_numpy=True).reshape(1, -1)
-        return torch.tensor(emb, device="cuda").float()
-
-    def _filter_generated_answer(self, full_response, query):
-        """
-        Filtra la respuesta generada por el modelo para eliminar contextos y mantener solo la parte relevante.
-        """
-        if "Assistant:" in full_response:
-            return full_response.split("Assistant:")[-1].strip()
-        return full_response.strip()
-    
-    def build_prompt(self, query, contexts):
-        """
-        Construye el prompt para el modelo de generación usando el query y los contextos recuperados.
-        """
-        print("Construyendo prompt para el modelo...")
-        context_str = "\n".join(contexts)
-        return (
-            f"The user is asking about the phrase '{query}'. Below are movie lines containing the phrase or similar phrases:\n"
-            f"{context_str}\n\n"
-            f"Please respond with the relevant movie lines and their corresponding movie titles in the following format:\n"
-            f"Phrase - Movie Title\n\n"
-            f"For example:\n"
-            f"Sayonara baby - Terminator 2\n"
-            f"GET BOND OUT OF THERE - Tomorrow Never Dies\n\n"
-            f"User Query: {query}\n"
-            f"Assistant:"
-        )
-
-        
     def _generate_embeddings(self):
-        """Genera embeddings para todas las líneas del dataset."""
-        print("Generando embeddings para todas las líneas...")
-        self.line_id_list = list(self.lines.keys())  # Lista ordenada de IDs de línea
-        texts = [self.lines[line_id] for line_id in self.line_id_list]
-        embeddings = self.embedding_model.encode(texts, convert_to_tensor=True)
+        """
+        Genera embeddings para todas las películas utilizando información enriquecida.
+        """
+        print("Generando embeddings...")
+        texts = [
+            f"Movie Title: {movie['title']}. Description: {movie['overview']}. "
+            f"Genres: {', '.join(movie['genres'])}. Actors: {', '.join(movie['actors'])}. "
+            f"Keywords: {', '.join(movie['keywords'])}. Rating: {movie['rating']}."
+            for movie in self.movies
+        ]
+
+        embeddings = self.embedding_model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
         print("Embeddings generados correctamente.")
         return embeddings
 
     def load_embeddings(self, file_path):
-        """Carga los embeddings y la lista de IDs desde un archivo .npz."""
         print(f"Cargando embeddings desde {file_path}...")
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"No se encontró el archivo de embeddings: {file_path}")
-
         data = np.load(file_path, allow_pickle=True)
         self.embeddings = torch.tensor(data["embeddings"]).to("cuda")
-        self.line_id_list = data["line_ids"].tolist()  # Cargar la lista de IDs de línea
-        print("Embeddings y line_ids cargados correctamente.")
+        print("Embeddings cargados correctamente.")
 
     def save_embeddings(self, file_path):
-        """Guarda los embeddings y la lista de IDs de línea en un archivo .npz."""
         print(f"Guardando embeddings en {file_path}...")
-        np.savez(file_path, embeddings=self.embeddings.cpu().numpy(), line_ids=self.line_id_list)
+        np.savez(file_path, embeddings=self.embeddings.cpu().numpy())
         print("Embeddings guardados correctamente.")
 
+    def embed(self, text):
+        emb = self.embedding_model.encode(text, convert_to_tensor=True)
+        return emb.unsqueeze(0)
 
+    def get_contexts(self, indices):
+        contexts = []
+        for i in indices:
+            if 0 <= i < len(self.movies):
+                movie = self.movies[i]
+                contexts.append(
+                    f"Title: {movie['title']}\nOverview: {movie['overview']}\nGenres: {', '.join(movie['genres'])}\n"
+                    f"Rating: {movie['rating']}\nActors: {', '.join(movie['actors'])}\nKeywords: {', '.join(movie['keywords'])}"
+                )
+        return contexts
 
+    def build_prompt(self, query, contexts):
+        context_str = "\n---\n".join(contexts)
+        prompt = (
+            f"Based on the user's request:\n'{query}'\n\n"
+            f"Here are some movies:\n{context_str}\n\n"
+            f"Please respond with the following format for each movie:\n"
+            f"Title: <movie title>\nDescription: <brief description>\nRating: <rating or N/A>\n\nResponse:"
+        )
+        return prompt
 
-# import os
-# import csv
-# from sentence_transformers import SentenceTransformer
-# from transformers import AutoTokenizer, AutoModelForCausalLM
-# import torch
-# import numpy as np
+    def _model_generate(self, prompt):
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to("cuda")
+        output = self.model.generate(
+            **inputs,
+            max_new_tokens=150,
+            do_sample=True,
+            top_p=0.9,
+            temperature=0.7,
+            pad_token_id=self.tokenizer.eos_token_id,
+            repetition_penalty=1.2
+        )
+        return self.tokenizer.decode(output[0], skip_special_tokens=True)
 
+    def _format_response(self, response_text):
+        sections = response_text.split("---")
+        movies = []
 
-# class RAGChatbot:
+        for section in sections:
+            lines = section.strip().split("\n")
+            movie = {}
+            for line in lines:
+                if line.startswith("Title:"):
+                    movie["title"] = line.split("Title:", 1)[1].strip()
+                elif line.startswith("Overview:"):
+                    movie["overview"] = line.split("Overview:", 1)[1].strip()
+                elif line.startswith("Genres:"):
+                    movie["genres"] = line.split("Genres:", 1)[1].strip()
+                elif line.startswith("Rating:"):
+                    movie["rating"] = line.split("Rating:", 1)[1].strip()
+            if movie:
+                movies.append(movie)
 
-#     def __init__(self, dataset_path, embedding_file="embeddings.npz", embedding_model_name="all-MiniLM-L6-v2"):
-#         """
-#         Inicialización del chatbot RAG con soporte para embeddings precalculados.
-#         """
-#         print(f"Cargando modelo de embeddings {embedding_model_name}...")
-#         self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
-
-#         # Cargar dataset
-#         print(f"Cargando dataset desde {dataset_path}...")
-#         # Inicialización de estructuras de datos
-#         self.lines = {}  # Mapeo lineID -> texto
-#         self.line_to_movie = {}  # Mapeo lineID -> movieID
-#         self.movies = {}  # Mapeo movieID -> movie_title
-#         self.conversations = []  # Lista de conversaciones
-#         self._load_dataset(dataset_path)
-
-#         # Cargar o generar embeddings
-#         if os.path.exists(embedding_file):
-#             self.load_embeddings(embedding_file)
-#         else:
-#             print("Generando embeddings para todas las líneas del dataset...")
-#             self.embeddings = self._generate_embeddings()
-#             self.save_embeddings(embedding_file)
-
-#         # Cargar modelo de generación
-#         print("Cargando modelo de generación (bigscience/bloom-560m)...")
-#         self.tokenizer = AutoTokenizer.from_pretrained("bigscience/bloom-560m")
-#         self.model = AutoModelForCausalLM.from_pretrained(
-#             "bigscience/bloom-560m",
-#             torch_dtype=torch.float16
-#         ).to("cuda")
-
-
-#     def _load_dataset(self, dataset_path):
-#         """Carga el dataset desde los archivos TSV."""
-#         lines_path = f"{dataset_path}/movie_lines.tsv"
-#         conversations_path = f"{dataset_path}/movie_conversations.tsv"
-#         movies_path = f"{dataset_path}/movie_titles_metadata.tsv"
-
-#         self._load_lines(lines_path)
-#         self._load_conversations(conversations_path)
-#         self._load_movies(movies_path)
-
-
-#     def _load_lines(self, lines_path):
-#         """Carga las líneas de diálogo desde movie_lines.tsv."""
-#         print(f"Cargando líneas desde {lines_path}...")
-#         with open(lines_path, "r", encoding="iso-8859-1") as f:
-#             reader = csv.reader(f, delimiter="\t")
-#             for row in reader:
-#                 if len(row) >= 5:  # Asegúrate de que haya suficientes columnas
-#                     line_id = row[0]  # ID de la línea
-#                     movie_id = row[2]  # ID de la película
-#                     text = row[4]  # Texto de la línea
-
-#                     # Guardar el texto de la línea
-#                     self.lines[line_id] = text
-
-#                     # Mapear la línea al ID de la película
-#                     if movie_id:
-#                         self.line_to_movie[line_id] = movie_id
-
-    
-#     def _load_conversations(self, conversations_path):
-#         """Carga las conversaciones desde movie_conversations.tsv."""
-#         with open(conversations_path, "r", encoding="iso-8859-1") as f:
-#             reader = csv.reader(f, delimiter="\t")
-#             for row in reader:
-#                 if len(row) == 4:
-#                     utterance_ids = eval(row[3])  # Convertir la lista de strings
-#                     conversation = {
-#                         "lines": [self.lines[line_id] for line_id in utterance_ids if line_id in self.lines],
-#                         "movies": {self.line_to_movie[line_id] for line_id in utterance_ids if line_id in self.line_to_movie}
-#                     }
-#                     self.conversations.append(conversation)
-    
-#     def _load_movies(self, movies_path):
-#         """Carga los títulos de las películas desde movie_titles_metadata.txt."""
-#         with open(movies_path, "r", encoding="iso-8859-1") as f:
-#             reader = csv.reader(f, delimiter="\t")
-#             for row in reader:
-#                 if len(row) >= 2:
-#                     movie_id, movie_title = row[:2]
-#                     self.movies[movie_id] = movie_title
-
-#     def _generate_embeddings(self):
-#         """Genera embeddings para todas las líneas del dataset."""
-#         texts = list(self.lines.values())
-#         return self.embedding_model.encode(texts, convert_to_tensor=True)
-
-
-#     def generate_answer(self, query: str):
-#         """
-#         Genera una respuesta basada en el contexto más similar al query.
-#         """
-#         print(f"Generando embeddings para la consulta: {query}")
-        
-#         # Generar embeddings para la consulta
-#         query_emb = self.embed(query)
-
-#         # Calcular similitud con todas las líneas
-#         similarities = torch.nn.functional.cosine_similarity(query_emb, self.embeddings, dim=-1)
-#         top_indices = torch.topk(similarities, k=5).indices.cpu().numpy()
-
-#         # Recuperar contextos relevantes con detalles de película
-#         retrieved_contexts = self.get_contexts(top_indices)
-
-#         # Construir el prompt (solo para uso interno del modelo)
-#         prompt = self.build_prompt(query, retrieved_contexts)
-#         print(f"Prompt construido (solo para modelo):\n{prompt}")
-
-#         # Generar la respuesta usando el modelo de lenguaje
-#         print("Generando respuesta con el modelo de lenguaje...")
-#         inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
-#         output = self.model.generate(
-#             **inputs,
-#             max_length=150,        # Limita la longitud de la respuesta
-#             do_sample=True,        # Usa muestreo
-#             temperature=0.3,       # Reducción de creatividad
-#             top_p=0.85,            # Nucleus sampling
-#             repetition_penalty=1.3 # Penaliza repeticiones
-#         )
-#         answer = self.tokenizer.decode(output[0], skip_special_tokens=True)
-
-#         # Filtrar la respuesta para eliminar el contexto y mantener solo lo relevante
-#         response = self._filter_generated_answer(answer, query)
-#         return response
-
-
-
-#     def _filter_generated_answer(self, full_response, query):
-#         """
-#         Filtra la respuesta generada por el modelo para eliminar contextos y mantener solo la parte relevante.
-#         """
-#         # Opcional: Busca el texto después de "Assistant:" si aparece
-#         if "Assistant:" in full_response:
-#             filtered_response = full_response.split("Assistant:")[-1].strip()
-#         else:
-#             filtered_response = full_response
-
-#         # Elimina repeticiones o ruidos generados
-#         lines = filtered_response.split("\n")
-#         return "\n".join(dict.fromkeys(lines)).strip()  # Eliminar duplicados
-
-
-
-    # def build_prompt(self, query, contexts):
-    #     """
-    #     Construye el prompt para el modelo de generación usando el query y los contextos recuperados.
-    #     """
-    #     print("Construyendo prompt para el modelo...")
-    #     context_str = "\n".join(contexts)
-    #     return (
-    #         f"The user is asking about the phrase '{query}'. Below are some relevant lines from movies related to the query:\n"
-    #         f"{context_str}\n\n"
-    #         f"Please respond in the following format:\n"
-    #         f"Example:\n"
-    #         f"Sayonara baby - Arnold Schwarzenegger - Terminator 2\n\n"
-    #         f"User Query: {query}\n"
-    #         f"Assistant:"
-    #     )   
-    
-
-    
-    # def embed(self, text):
-    #     """
-    #     Convierte el texto en un embedding utilizando el modelo de embeddings.
-    #     """
-    #     print("Generando embeddings para el texto...")
-    #     emb = self.embedding_model.encode(text, convert_to_numpy=True).reshape(1, -1)
-    #     return torch.tensor(emb, device="cuda").float()  # Mover a GPU como tensores float
-    
-    # def get_contexts(self, indices):
-    #     """
-    #     Recupera los textos asociados a los índices devueltos por similitud, junto con sus películas correspondientes.
-    #     """
-    #     print(f"Recuperando contextos para índices: {indices}")
-    #     contexts = []
-    #     line_keys = list(self.lines.keys())  # Lista ordenada de IDs de línea
-
-    #     for i in indices:
-    #         line_id = line_keys[i] if 0 <= i < len(line_keys) else None
-    #         if line_id:
-    #             print(f"Procesando línea {line_id}...")
-    #             movie_id = self.line_to_movie.get(line_id, None)
-    #             print(f"ID de película encontrado: {movie_id}")
-    #             if movie_id in self.movies:
-    #                 print(f"Película asociada: {self.movies[movie_id]}")
-    #             else:
-    #                 print("Película no encontrada en self.movies")
-    #         else:
-    #             print(f"Índice inválido: {i}")
-
-    #     return contexts
-    
-    # def save_embeddings(self, file_path):
-    #     """
-    #     Guarda los embeddings y textos en un archivo .npz.
-    #     """
-    #     print(f"Guardando embeddings en {file_path}...")
-    #     np.savez(file_path, embeddings=self.embeddings.cpu().numpy(), texts=list(self.lines.values()))
-    #     print("Embeddings guardados correctamente.")
-
-    # def load_embeddings(self, file_path):
-    #     """
-    #     Carga los embeddings y textos desde un archivo .npz.
-    #     """
-    #     print(f"Cargando embeddings desde {file_path}...")
-    #     if not os.path.exists(file_path):
-    #         raise FileNotFoundError(f"No se encontró el archivo de embeddings: {file_path}")
-        
-    #     data = np.load(file_path)
-    #     self.embeddings = torch.tensor(data["embeddings"]).to("cuda")  # Mover a GPU
-    #     self.lines = {i: text for i, text in enumerate(data["texts"])}  # Reconstruir mapeo lineID -> texto
-    #     print("Embeddings cargados correctamente.")
-
-
-
-
+        return movies
