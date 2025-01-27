@@ -50,7 +50,7 @@ const ChatInterface = () => {
         </select>
         <input
           type="text"
-          placeholder="Escribe tu frase o diálogo..."
+          placeholder="Describe la pelicula..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
