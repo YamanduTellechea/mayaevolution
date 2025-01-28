@@ -8,8 +8,7 @@ const ModeSelector = ({ mode, setMode }) => {
       onChange={(e) => setMode(e.target.value)}
     >
       <option value="rag">RAG</option>
-      <option value="finetune">Fine-Tune</option>
-      <option value="hybrid">Híbrido</option>
+      <option value="gpt4">GPT4</option>      
     </select>
   );
 };

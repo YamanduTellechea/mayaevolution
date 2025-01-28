@@ -45,8 +45,7 @@ const ChatInterface = () => {
       <div className="input-group">
         <select value={mode} onChange={(e) => setMode(e.target.value)}>
           <option value="rag">RAG</option>
-          <option value="finetune">Fine-Tune</option>
-          <option value="hybrid">Híbrido</option>
+          <option value="gpt4">GPT4</option>          
         </select>
         <input
           type="text"
@@ -73,6 +72,9 @@ const ChatInterface = () => {
                   </p>
                   <p>
                     <strong>Genres:</strong> {movie.genres || "N/A"}
+                  </p>
+                  <p>
+                    <strong>Actors:</strong> {movie.actors || "N/A"}
                   </p>
                   <p>
                     <strong>Rating:</strong> {movie.rating || "N/A"}
