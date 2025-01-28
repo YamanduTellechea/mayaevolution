@@ -2,111 +2,80 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .rag_pipeline import RAGChatbot
-from .fine_tune import FineTunedRAGChatbot
-# Solo descomenta si ya tienes modelos fine-tuneados
-# from .fine_tune_pipeline import ...
-from .hybrid_pipeline import HybridChatbot
+from .gpt4_chatbot import GPT4Chatbot  # Importamos la clase GPT4Chatbot
 import os
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
+# Variables globales para almacenar modelos cargados
 rag_model = None
-ft_model = None
-hb_model = None
+gpt4_model = None
+
+def initialize_rag_model():
+    """
+    Inicializa el modelo RAG si aún no está cargado.
+    """
+    global rag_model
+    if rag_model is None:
+        print("Inicializando modelo RAG...")
+        dataset_path = "chatapp/dataset"
+        embedding_file = "movie_embeddings.npz"
+        rag_model = RAGChatbot(
+            dataset_path=dataset_path            
+        )
+        print("Modelo RAG inicializado correctamente.")
+
+def initialize_gpt4_model():
+    """
+    Inicializa el modelo GPT-4 si aún no está cargado.
+    """
+    global gpt4_model
+    if gpt4_model is None:
+        print("Inicializando modelo GPT-4...")
+        gpt4_model = GPT4Chatbot()
+        print("Modelo GPT-4 inicializado correctamente.")
 
 class ChatView(APIView):
     def post(self, request, format=None):
+        """
+        Maneja las solicitudes POST para generar respuestas según el modo seleccionado.
+        """
         user_query = request.data.get("query", "")
-        mode = request.data.get("mode", "rag")  # 'rag', 'finetune', 'hybrid'
+        mode = request.data.get("mode", "rag")  # 'rag', 'gpt4'
 
-        global rag_model, ft_model, hb_model
+        try:
+            if mode == "rag":
+                initialize_rag_model()  # Inicializar RAG si es necesario
+                answer = rag_model.generate_answer(user_query)
 
-        if rag_model is None:
-            dataset_path = "chatapp/dataset"
-            embedding_file = "movie_embeddings.npz"
-            rag_model = RAGChatbot(
-                dataset_path=dataset_path, 
-                embedding_file=embedding_file,
-                embedding_model_name="sentence-transformers/all-distilroberta-v1",                
-                base_model_name="microsoft/phi-4"               
-            )
+            elif mode == "gpt4":                
+                initialize_gpt4_model()  # Inicializar GPT-4 si es necesario
+                answer = gpt4_model.generate_answer(user_query)
 
-        if mode == "rag":
-            answer = rag_model.generate_answer(user_query)
+            else:
+                return Response({"error": "Modo no válido"}, status=status.HTTP_400_BAD_REQUEST)
 
-        elif mode == "finetune":
-            # Ruta al modelo fine-tuneado
-            ft_model_path = "chatapp/dataset/fine_tuned_model"
+            # Devolver la respuesta generada
+            return Response({"query": user_query, "answer": answer}, status=status.HTTP_200_OK)
 
-            if ft_model is None:
-                if not os.path.exists(ft_model_path):
-                    return Response({"error": "El modelo fine-tuneado no existe en la ruta especificada."},
-                                    status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                try:
-                    # Cargar el modelo y el tokenizador
-                    
-                    print(f"Cargando modelo fine-tuneado desde {ft_model_path}...")
-                    ft_tokenizer = AutoTokenizer.from_pretrained(ft_model_path)
-                    ft_instance = AutoModelForSeq2SeqLM.from_pretrained(ft_model_path).to("cuda")
-                    ft_model = (ft_tokenizer, ft_instance)
-                except Exception as e:
-                    return Response({"error": f"Error al cargar el modelo fine-tuneado: {str(e)}"},
-                                    status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Generar respuesta sin RAG, solo fine-tuneado
-            prompt = (
-                f"El usuario pregunta: '{user_query}'\n"
-                f"Por favor, responde con recomendaciones de películas basándote en tus conocimientos."
-            )
-
-            try:
-                tokenizer, model = ft_model
-                inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to("cuda")
-                output = model.generate(
-                    **inputs,
-                    max_new_tokens=150,
-                    do_sample=True,
-                    top_p=0.9,
-                    temperature=0.7,
-                    pad_token_id=tokenizer.eos_token_id,
-                    repetition_penalty=1.2
-                )
-                answer = tokenizer.decode(output[0], skip_special_tokens=True).strip()
-            except Exception as e:
-                return Response({"error": f"Error al generar la respuesta: {str(e)}"},
-                                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Respuesta final
-            return Response({"answer": answer}, status=status.HTTP_200_OK)
-
-
-        elif mode == "hybrid":
-            # Modo híbrido: si no existe hb_model, lo creamos
-            ft_model_path = "chatapp/fine_tuned_model"
-            if hb_model is None:
-                if not os.path.exists(ft_model_path):
-                    return Response({"error": "El modelo fine-tuneado no existe para modo híbrido."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                hb_model = HybridChatbot(rag_model=rag_model, finetuned_model_path=ft_model_path)
-
-            answer = hb_model.generate_answer(user_query)
-        else:
-            return Response({"error": "Modo no válido"}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({"query": user_query, "answer": answer}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": f"Error al procesar la solicitud: {str(e)}"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ResultsView(APIView):
     def get(self, request, format=None):
-        # Ejemplo de resultados (puedes modificar a tu gusto)
+        """
+        Devuelve un ejemplo de resultados para fines de demostración.
+        """
+        # Ejemplo de datos de comparación
         results = {
             "comparisons": [
-                {"input": "Quiero ver una comedia romántica navideña", 
-                 "RAG": "Te recomiendo 'Love Actually' ...", 
-                 "FineTune": "Prueba 'The Holiday' ...", 
-                 "Hybrid": "Basado en lo encontrado, quizás 'Love Actually' ..."}
+                {"input": "Quiero ver una comedia romántica navideña",
+                 "RAG": "Te recomiendo 'Love Actually' ...",
+                 "GPT-4": "Prueba 'The Holiday', es una opción perfecta para una noche navideña romántica."}
             ],
             "metrics": {
-                "BLEU": {"RAG": 0.25, "FineTune": 0.23, "Hybrid": 0.27},
-                "CostEstimate": {"RAG": "Low", "FineTune": "Medium", "Hybrid": "Medium-Low"}
+                "BLEU": {"RAG": 0.25, "GPT-4": 0.35},
+                "CostEstimate": {"RAG": "Low", "GPT-4": "High"}
             }
         }
         return Response(results, status=status.HTTP_200_OK)
