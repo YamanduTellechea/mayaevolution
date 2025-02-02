@@ -165,3 +165,49 @@ button:hover {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* Opciones de la página de inicio */
+.homepage-options {
+  display: flex;
+  justify-content: center;
+  gap: 20px; /* Espaciado horizontal entre botones */
+  margin-top: 20px; /* Separación del título */
+}
+
+.homepage-button {
+  text-decoration: none;
+  padding: 15px 25px;
+  background: #00796b;
+  color: white;
+  font-size: 1.2rem;
+  font-weight: bold;
+  border-radius: 30px;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.homepage-button:hover {
+  background: #004d40;
+  transform: scale(1.05);
+}
+
+/* Botón de volver */
+.back-button {
+  text-decoration: none;
+  padding: 12px 25px;
+  background: #00796b; /* Color de fondo */
+  color: white; /* Color del texto */
+  font-size: 1rem;
+  font-weight: bold;
+  border-radius: 30px; /* Bordes redondeados */
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15); /* Sombra */
+  display: inline-block; /* Asegura que actúe como un botón */
+  margin: 10px 0; /* Separación del contenido */
+}
+
+.back-button:hover {
+  background: #004d40; /* Color de fondo al pasar el ratón */
+  transform: scale(1.05); /* Efecto de escala */
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2); /* Sombra más fuerte */
+}
