@@ -77,19 +77,27 @@ class GPT4Chatbot:
                 max_tokens=300
             )
             raw_answer = response.choices[0].message.content.strip()
+
+            # Obtener información de tokens usados
+            total_tokens = response.usage.total_tokens  # Total de tokens (prompt + completion)
+            
+            # Coste estimado basado en precios de OpenAI (GPT-4 Turbo es más barato)
+            cost_per_1000_tokens = 0.06  # Precio en dólares por 1000 tokens (GPT-4)
+            estimated_cost = (total_tokens / 1000) * cost_per_1000_tokens  # Coste final
+
             
             # Intentar parsear el JSON
             try:
                 parsed_answer = json.loads(raw_answer)               
 
-                return parsed_answer['answer']
+                return parsed_answer['answer'], estimated_cost
             except json.JSONDecodeError:
                 print("La respuesta no es un JSON válido.")
-                return {"error": "La respuesta no es un JSON válido.", "raw_answer": raw_answer}
+                return {"error": "La respuesta no es un JSON válido.", "raw_answer": raw_answer}, estimated_cost
                      
         except Exception as e:
             print(f"Error al llamar a GPT-4: {e}")
-            return "Lo siento, hubo un error al generar la respuesta."
+            return "Lo siento, hubo un error al generar la respuesta.",0.0
 
     def _format_response(self, response: str):
         """

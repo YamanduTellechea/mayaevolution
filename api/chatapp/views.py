@@ -6,11 +6,23 @@ from .gpt4_chatbot import GPT4Chatbot  # Importamos la clase GPT4Chatbot
 from .models import ChatHistory
 import os
 import time
+<<<<<<< HEAD
 
 import traceback
 import logging
 from .serializers import ChatHistorySerializer
 logger = logging.getLogger(__name__)
+=======
+from .models import ChatHistory
+from .serializers import ChatHistorySerializer
+import logging  # Para registrar mensajes de depuración
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+>>>>>>> f19589084877cd9d90a9ffdd5b0f0ceb2eeb4094
 
 # Variables globales para almacenar modelos cargados
 rag_model = None
@@ -24,7 +36,7 @@ def initialize_rag_model():
     if rag_model is None:
         print("Inicializando modelo RAG...")
         dataset_path = "chatapp/dataset"
-        embedding_file = "movie_embeddings.npz"
+        embedding_file = "movie_embeddings.faiss"
         rag_model = RAGChatbot(
             dataset_path=dataset_path            
         )
@@ -51,25 +63,55 @@ class ChatView(APIView):
         logger.debug(f"Solicitud recibida. Modo: {mode}, Consulta: {user_query}")        
 
         try:
+<<<<<<< HEAD
             start_time = time.time()
+=======
+            start_time = time.time()  # Iniciar medición de tiempo
+
+>>>>>>> f19589084877cd9d90a9ffdd5b0f0ceb2eeb4094
             if mode == "rag":
-                initialize_rag_model()  # Inicializar RAG si es necesario
+                initialize_rag_model()
                 answer = rag_model.generate_answer(user_query)
 
-            elif mode == "gpt4":                
-                initialize_gpt4_model()  # Inicializar GPT-4 si es necesario
-                answer = gpt4_model.generate_answer(user_query)
-
+            elif mode == "gpt4":
+                initialize_gpt4_model()
+                answer, estimated_cost = gpt4_model.generate_answer(user_query)
             else:
                 return Response({"error": "Modo no válido"}, status=status.HTTP_400_BAD_REQUEST)
             
             end_time = time.time()  # Finalizar medición de tiempo
             response_time = round(end_time - start_time, 3)  # Convertir a milisegundos
 
+<<<<<<< HEAD
+=======
+            end_time = time.time()  # Finalizar medición de tiempo
+            response_time = round(end_time - start_time, 3)  # Convertir a milisegundos
+
+>>>>>>> f19589084877cd9d90a9ffdd5b0f0ceb2eeb4094
             # Estimación del coste de GPT-4
             estimated_cost = 0.0
             if mode == "gpt4":
                 estimated_cost = 0.06  # Ajustar según API de OpenAI
+<<<<<<< HEAD
+=======
+
+            interaction = ChatHistory.objects.create(
+                query=user_query,
+                mode=mode,
+                response=answer,
+                response_time=response_time,
+                cost=estimated_cost
+            )
+            logger.info(f"Interacción registrada: {interaction}")
+
+            # Devolver la respuesta junto con métricas
+            return Response({
+                "query": user_query,
+                "answer": answer,
+                "time": response_time,
+                "cost": estimated_cost
+            }, status=status.HTTP_200_OK)
+>>>>>>> f19589084877cd9d90a9ffdd5b0f0ceb2eeb4094
 
             interaction = ChatHistory.objects.create(
                 query=user_query,
@@ -93,6 +135,49 @@ class ChatView(APIView):
             traceback.print_exc()  # Esto imprime el error completo en consola
             return Response({"error": f"Error al procesar la solicitud: {str(e)}"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class ChatHistoryView(APIView):
+    def get(self, request, *args, **kwargs):
+        """
+        Maneja las solicitudes GET para devolver el historial de interacciones.
+        """
+        try:
+            # Recupera todos los registros de la base de datos ordenados por fecha
+            history = ChatHistory.objects.all().order_by("-timestamp")
+            serializer = ChatHistorySerializer(history, many=True)  # Serializa los datos
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Si hay un error, devuélvelo con un mensaje apropiado
+            return Response(
+                {"error": f"Error al obtener el historial: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+# class ChatView(APIView):
+#     def post(self, request, format=None):
+#         """
+#         Maneja las solicitudes POST para generar respuestas según el modo seleccionado.
+#         """
+#         user_query = request.data.get("query", "")
+#         mode = request.data.get("mode", "rag")  # 'rag', 'gpt4'
+
+#         try:
+#             if mode == "rag":
+#                 initialize_rag_model()  # Inicializar RAG si es necesario
+#                 answer = rag_model.generate_answer(user_query)
+
+#             elif mode == "gpt4":                
+#                 initialize_gpt4_model()  # Inicializar GPT-4 si es necesario
+#                 answer = gpt4_model.generate_answer(user_query)
+
+#             else:
+#                 return Response({"error": "Modo no válido"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             # Devolver la respuesta generada
+#             return Response({"query": user_query, "answer": answer}, status=status.HTTP_200_OK)
+
+#         except Exception as e:
+#             return Response({"error": f"Error al procesar la solicitud: {str(e)}"},
+#                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ChatHistoryView(APIView):
     def get(self, request, *args, **kwargs):

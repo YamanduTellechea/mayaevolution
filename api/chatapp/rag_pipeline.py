@@ -1,12 +1,20 @@
-
 import os
 import json
 import numpy as np
 import faiss
-from sentence_transformers import SentenceTransformer
+import gc
 import pandas as pd
 import spacy
+import warnings
+from sentence_transformers import SentenceTransformer
+import multiprocessing
 
+# Configurar multiprocessing en MacOS
+if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn", force=True)
+
+# Suprimir advertencias de multiprocessing
+warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing.resource_tracker")
 
 class RAGChatbot:
     def __init__(self, dataset_path, embedding_file="chatapp/dataset/movie_embeddings.faiss",
@@ -20,19 +28,23 @@ class RAGChatbot:
         self.similarity_threshold = similarity_threshold
         self.openai_api_key = openai_api_key
 
-        # Configurar OpenAI
+        # Configurar OpenAI si se proporciona la clave
         if openai_api_key:
             import openai
             openai.api_key = openai_api_key
 
-        # Carga de modelo de embeddings
+        # Carga de modelo de embeddings en CPU para evitar problemas de CUDA
         print(f"Cargando modelo de embeddings {embedding_model_name}...")
+<<<<<<< HEAD
         #self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
         self.embedding_model = SentenceTransformer(embedding_model_name)
 
         # # Carga del modelo de NER
         # print("Cargando modelo de NER con spaCy...")
         # self.nlp = spacy.load("en_core_web_sm")
+=======
+        self.embedding_model = SentenceTransformer(embedding_model_name, device="cpu")
+>>>>>>> f19589084877cd9d90a9ffdd5b0f0ceb2eeb4094
 
         print("Cargando modelo de NER con spaCy...")
         try:
@@ -60,13 +72,48 @@ class RAGChatbot:
 
         if os.path.exists(self.embedding_file):
             print(f"Cargando índice FAISS desde {self.embedding_file}...")
-            self.load_faiss_index(self.embedding_file)
+            try:
+                self.load_faiss_index(self.embedding_file)
+            except Exception as e:
+                print(f"Error al cargar FAISS: {e}. Generando un nuevo índice...")
+                embeddings = self._generate_embeddings()
+                self.create_faiss_index(embeddings)
+                self.save_faiss_index(self.embedding_file)
         else:
             print("Generando embeddings para las películas y construyendo índice FAISS...")
             embeddings = self._generate_embeddings()
             self.create_faiss_index(embeddings)
             print(f"Guardando índice FAISS en {self.embedding_file}...")
             self.save_faiss_index(self.embedding_file)
+    
+    def generate_answer(self, query: str):
+        """
+        Genera una respuesta utilizando el índice FAISS para la búsqueda por similaridad.
+        """
+        query_emb = self.embedding_model.encode([query], convert_to_tensor=False, normalize_embeddings=True)
+        distances, indices = self.index.search(query_emb, k=3)
+
+        contexts = [
+            self.id_to_movie[i]
+            for i, dist in zip(indices[0], distances[0])
+            if dist > self.similarity_threshold
+        ]
+
+        if not contexts:
+            return {"query": query, "answer": "No se encontraron recomendaciones relevantes."}
+        
+        response = [
+                 {
+                     "title": movie["title"],
+                     "overview": movie["overview"],
+                     "genres": ", ".join(movie["genres"]),
+                     "actors": ", ".join(movie["actors"]),
+                     "rating": movie["rating"]
+                 }
+                 for movie in contexts
+             ]
+
+        return response
 
     def _load_movies(self, dataset_path):
         """
@@ -142,7 +189,7 @@ class RAGChatbot:
             f"Keywords: {', '.join(movie['keywords'])}. Rating: {movie['rating']}."
             for movie in self.movies
         ]
-        return self.embedding_model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
+        return np.array(self.embedding_model.encode(texts, convert_to_tensor=False, normalize_embeddings=True), dtype=np.float32)
 
     def create_faiss_index(self, embeddings):
         """
@@ -187,31 +234,9 @@ class RAGChatbot:
             "movies": list(set(movies))
         }
 
-    def generate_answer(self, query: str):
+    def cleanup(self):
         """
-        Genera una respuesta utilizando el índice FAISS para la búsqueda por similaridad.
+        Libera recursos para evitar errores con multiprocessing.
         """
-        query_emb = self.embedding_model.encode([query], convert_to_tensor=False, normalize_embeddings=True)
-        distances, indices = self.index.search(query_emb, k=3)
-
-        contexts = [
-            self.id_to_movie[i]
-            for i, dist in zip(indices[0], distances[0])
-            if dist > self.similarity_threshold
-        ]
-
-        if not contexts:
-            return {"query": query, "answer": "No se encontraron recomendaciones relevantes."}
-        
-        response = [
-                 {
-                     "title": movie["title"],
-                     "overview": movie["overview"],
-                     "genres": ", ".join(movie["genres"]),
-                     "actors": ", ".join(movie["actors"]),
-                     "rating": movie["rating"]
-                 }
-                 for movie in contexts
-             ]
-
-        return response
+        del self.index
+        gc.collect()
