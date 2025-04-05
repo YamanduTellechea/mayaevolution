@@ -9,7 +9,7 @@ import spacy
 
 
 class RAGChatbot:
-    def __init__(self, dataset_path, embedding_file="movie_embeddings.faiss",
+    def __init__(self, dataset_path, embedding_file="chatapp/dataset/movie_embeddings.faiss",
                  embedding_model_name="sentence-transformers/all-distilroberta-v1",
                  similarity_threshold=0.5, openai_api_key=None):
         """
@@ -27,11 +27,20 @@ class RAGChatbot:
 
         # Carga de modelo de embeddings
         print(f"Cargando modelo de embeddings {embedding_model_name}...")
-        self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
+        #self.embedding_model = SentenceTransformer(embedding_model_name, device="cuda")
+        self.embedding_model = SentenceTransformer(embedding_model_name)
 
-        # Carga del modelo de NER
+        # # Carga del modelo de NER
+        # print("Cargando modelo de NER con spaCy...")
+        # self.nlp = spacy.load("en_core_web_sm")
+
         print("Cargando modelo de NER con spaCy...")
-        self.nlp = spacy.load("en_core_web_sm")
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+        except OSError:            
+            print("Modelo en_core_web_sm no encontrado. Descargando...")
+            spacy.cli.download("en_core_web_sm")
+            self.nlp = spacy.load("en_core_web_sm")
 
         # FAISS Index
         self.index = None

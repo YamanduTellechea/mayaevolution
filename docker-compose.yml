@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: django_app
+    # Monta el puerto 8000 del contenedor al 8000 local
+    ports:
+      - "8000:8000"
+    # Si necesitas variables de entorno, añádelas aquí o usa env_file    
+      # Si necesitas credenciales para GPT-4, etc.
+      # - OPENAI_API_KEY=xxxxx
+    volumes:
+      - ./api:/app
+      - ./api/chatapp/dataset:/app/chatapp/dataset
+      
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: react_app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend
+
+ 

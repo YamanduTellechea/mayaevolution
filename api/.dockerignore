@@ -1,0 +1,9 @@
+chatapp/dataset/
+*.pt
+*.h5
+*.parquet
+*.ckpt
+*.csv
+__pycache__/
+.env
+*.faiss

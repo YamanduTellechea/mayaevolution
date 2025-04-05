@@ -2,6 +2,8 @@ import openai
 import json
 # Configurar clave de API directamente en el código
 
+
+
 class GPT4Chatbot:
     def __init__(self):
         """
